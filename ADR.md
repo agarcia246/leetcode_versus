@@ -6,17 +6,13 @@ For this project, my idea was to build a game where players can face off against
 Tech Stack:
 
 - Frontend
-    - For my frontend I decided to use react since:
-        1. I am familiar with it
-        2. I can build quickly with it
-        3. 
+    - react static pages served from the api
 - Backend:
     - FastAPI
 - Database:
     - SQLite
 - APIS: 
     - Leetcode Graphql API
-- Tools Used: 
 
 Database design:
 -the data
