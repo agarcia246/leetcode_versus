@@ -43,7 +43,3 @@ GET /api/rooms/[code]
 POST /api/rooms/[code]/join
     - 
 GET /api/rooms/[code]/start
-
-
-
-AI DISCLAIMER:
