@@ -1,45 +1,9 @@
-Project introduction:
-For this project, my idea was to build a game where players can face off against each other in leetcode competitions 
+## [1]. DATABASE DESIGN 
+Date: 2026-09-29
+Status: Decided
+Context: I decided to start this project by building my database schema. Once I have a clear view of all the data that I want to manage, I can then start connecting everything together.
+Decision: For my project, what I decided to do was to have a central table which would handle all the sessions and stuff, called rooms. Then, I'd have some smaller tables called players, problems, submissions, and topics which would provide some like extra data relating to the relating to the session. Finally, we'd have some, some joining tables, which are room_problems, room_players, and problem_topics which connect the, the many to many relationships between the tables
+Alternatives considered: At one point I wanted to get rid of the problem_topics table because I felt that it would be simpler to just store topics as a long string in the problems table. In the end I decided against this because since the data would be repeated a lot since a lot of the problem share the same topics it's  better to just make a join table
+Consequences:  know that I have my database design. I can finally move forward and start building the API and the rest of the app. Since I already know how my data will be structured it's easier to find out how to connect it to the user.
 
 
-
-Tech Stack:
-
-- Frontend
-    - react static pages served from the api
-- Backend:
-    - FastAPI
-- Database:
-    - SQLite
-- APIS: 
-    - Leetcode Graphql API
-
-Database design:
--the data
-
-
-API Design:
-POST /api/rooms
-    - What does it do: 
-        1. checks that the username given exists in leetcode and adds the user to the players table. 
-        2. based on the user's filters obtains the questions from the leetcode graphql api and adds them to problem and problem_topic tables
-        3. Creates room with the following data in the room table of the db:
-            a. room_code: a random 6 digit alphanumerical that marks the room so that others can join
-            b. status: initially set to created. Marks the current state of the room (created, started, finished, inactive)
-            c. start_time: marks the time that the room was created
-            d. host: username of the user that created the room
-
-        the user's will then be redirected to room/code and their username will be stored in their local storage
-
-GET /api/rooms/[code]
-    - runs every 5 seconds
-    - what does it do:
-        - makes an api call the leetcode user to each of the users in the room
-        - obtains a list of their past 5 submissions
-        - if any of the names of those submissions matches the one of the active problems of the room it records them in the submissions table
-        - if
-        
-
-POST /api/rooms/[code]/join
-    - 
-GET /api/rooms/[code]/start
