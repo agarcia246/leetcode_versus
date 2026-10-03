@@ -1,7 +1,9 @@
-from models import CreateRoomModel, Player, Room
+from models import CreateRoomModel, Player, Room, Problem, ProblemTopic, Topic, RoomProblem
 import string
 import random
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from datetime import datetime, timezone
 
 def generate_room_code() -> str:
     room_code = ""
@@ -14,8 +16,29 @@ def generate_room_code() -> str:
     return room_code
 
 
-def add_problems_to_room(db: Session, count:int, topics: list[str], difficulty:str):
-    
+
+
+def add_problems_to_room(db: Session, count:int, topics: list[str], difficulty:str, room_id:int) -> None:
+
+
+    problems = db.query(Problem.id).join(ProblemTopic, Problem.id == ProblemTopic.problem_id).join(Topic, Topic.id == ProblemTopic.topic_id).filter(Topic.topic_name in topics, Problem.difficulty == difficulty).order_by(func.random()).limit(count).all()
+
+    new_rows = []
+
+    for id in range(len(problems)):
+        new_rows.append(RoomProblem(
+            room_id=room_id,
+            problem_id=problems[id],
+            display_order=id+1
+        ))
+
+    db.add_all(new_rows)
+    db.commit()
+
+
+
+
+
 
 
 
@@ -50,22 +73,38 @@ def add_problems_to_room(db: Session, count:int, topics: list[str], difficulty:s
         # poll_error = None : Null
 
 
-    # API call return {room_id, host_username}
+# API call return {room_id, host_username}
 def CreateRoom(db: Session, model: CreateRoomModel):
-
-
     code = generate_room_code()
 
-    host_username = db.query(Player).filter(Player.lc_user == model.host_username).first()
+    host_id = db.query(Player.id).filter(Player.lc_user == model.host_username).scalar()
 
-    if host_username is None:
+    if host_id is None:
         new_user = Player(lc_user=model.host_username)
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
+        host_id = db.query(Player.id).filter(Player.lc_user == model.host_username).scalar()
+
+    room = Room(
+        room_code=code,
+        host_id=host_id,
+        duration_min=model.duration,
+        creation_time=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    )
+
+    db.add(room)
+    db.commit()
+    db.refresh(room)
 
 
 
-    
+
+
+    add_problems_to_room(db=db, count=model.problem_count, topics=model.topics, difficulty=model.difficulty, room_id=room.id)
+
+
+
+
 
 
