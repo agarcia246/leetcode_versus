@@ -1,18 +1,35 @@
-from sqlalchemy import create_engine
+from pathlib import Path
+
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
-import os
-from dotenv import load_dotenv
 
-load_dotenv()
+from app.config import DATA_DIR
 
 
-DATA_DIR = os.getenv("DATA_DIR", "data")
-os.makedirs(DATA_DIR, exist_ok=True)
-
-DATABASE_URL = f"sqlite:///{DATA_DIR}/app.db"
+DATABASE_URL = f"sqlite:///{DATA_DIR / 'app.db'}"
+SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread":False})
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 SessionLocal = sessionmaker(engine)
 Base = declarative_base()
+
+
+@event.listens_for(engine, "connect")
+def enable_foreign_keys(dbapi_connection, _connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+def init_db() -> None:
+    """Create tables from schema.sql. This is the schema the app runs."""
+
+    schema = SCHEMA_PATH.read_text()
+    connection = engine.raw_connection()
+    try:
+        connection.executescript(schema)
+        connection.commit()
+    finally:
+        connection.close()

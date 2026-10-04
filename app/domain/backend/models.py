@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import enum
 
 from sqlalchemy import (
@@ -15,7 +15,7 @@ from sqlalchemy import (
 
 from sqlalchemy.orm import relationship
 
-from database import Base
+from app.database import Base
 
 
 
@@ -242,12 +242,57 @@ class ProblemTopic(Base):
 
 
 
+DIFFICULTIES = ("Easy", "Medium", "Hard")
+
+
 class CreateRoomModel(BaseModel):
-    host_username:str
-    duration:int
-    problem_count:int
-    difficulty:str
-    topics:list[str]
+    host_username: str
+    duration: int
+    problem_count: int
+    difficulty: str
+    topics: list[str]
+
+    @field_validator("host_username")
+    @classmethod
+    def host_username_present(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("host_username is required")
+        return cleaned
+
+    @field_validator("duration")
+    @classmethod
+    def duration_in_range(cls, value: int) -> int:
+        if value < 1 or value > 180:
+            raise ValueError("duration must be between 1 and 180 minutes")
+        return value
+
+    @field_validator("problem_count")
+    @classmethod
+    def problem_count_in_range(cls, value: int) -> int:
+        if value < 1 or value > 10:
+            raise ValueError("problem_count must be between 1 and 10")
+        return value
+
+    @field_validator("difficulty")
+    @classmethod
+    def difficulty_choice(cls, value: str) -> str:
+        cleaned = value.strip().capitalize()
+        if cleaned not in DIFFICULTIES:
+            raise ValueError("difficulty must be Easy, Medium, or Hard")
+        return cleaned
+
+    @field_validator("topics")
+    @classmethod
+    def topics_present(cls, value: list[str]) -> list[str]:
+        cleaned = []
+        for topic in value:
+            name = topic.strip()
+            if name and name not in cleaned:
+                cleaned.append(name)
+        if not cleaned:
+            raise ValueError("at least one topic is required")
+        return cleaned
 
 class JoinRoomModel(BaseModel):
     username:str
