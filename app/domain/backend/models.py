@@ -255,7 +255,7 @@ class JoinRoomModel(BaseModel):
 
 
 class StartRoomModel(BaseModel):
-    player_id:str
+    player_id:int
     room_code:str
 
 

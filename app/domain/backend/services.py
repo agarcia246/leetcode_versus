@@ -7,6 +7,7 @@ from models import (
     Topic,
     RoomProblem,
     JoinRoomModel,
+    GetRoomModel,
     RoomPlayer,
     StartRoomModel,
     Submission
@@ -17,6 +18,7 @@ import string
 from datetime import datetime, timezone, timedelta
 
 import requests
+from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -25,10 +27,78 @@ ROOM_STATUS_CREATED = "Created"
 ROOM_STATUS_ACTIVE = "Active"
 ROOM_STATUS_FINISHED = "Finished"
 
+RESULT_IN_PROGRESS = "In_Progress"
+RESULT_WINNER = "Winner"
+RESULT_LOSER = "Loser"
+FINAL_RESULTS = {RESULT_WINNER, RESULT_LOSER}
 
-# =========================
-# Utility Functions
-# =========================
+
+# Utilities
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def to_db_time(value: datetime) -> str:
+    """Store timestamps as UTC ISO strings. Time columns are TEXT."""
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def parse_db_time(value) -> datetime | None:
+    """Read a TEXT timestamp back into a timezone-aware datetime."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone(timezone.utc)
+
+
+def submission_in_window(
+    submission_time: datetime,
+    start_time: datetime | None,
+    end_time: datetime | None,
+) -> bool:
+    """Count a solve only after the match starts and before it ends."""
+
+    if start_time is None or submission_time < start_time:
+        return False
+
+    if end_time is not None and submission_time > end_time:
+        return False
+
+    return True
+
+
+def assign_match_results(room_players: list[RoomPlayer]) -> None:
+    """Highest score wins. A tie at the top shares the win. Zero solves is a loss."""
+
+    if not room_players:
+        return
+
+    top_score = max(player.score for player in room_players)
+
+    for player in room_players:
+        if top_score > 0 and player.score == top_score:
+            player.result = RESULT_WINNER
+        else:
+            player.result = RESULT_LOSER
 
 
 def generate_room_code(db: Session) -> str:
@@ -70,7 +140,7 @@ def get_or_create_player(db: Session, username: str) -> Player:
 
 
 
-def add_player_to_room(db: Session, player_id: int, room_id: int) -> None:
+def add_player_to_room(db: Session, player_id: int, room_id: int) -> RoomPlayer | None:
     """Add a player to a room if not already present."""
 
     existing = (
@@ -83,16 +153,17 @@ def add_player_to_room(db: Session, player_id: int, room_id: int) -> None:
     )
 
     if existing is not None:
-        return
+        return None
 
     room_player = RoomPlayer(
         room_id=room_id,
         player_id=player_id,
-        joined_at=datetime.now(timezone.utc),
+        joined_at=to_db_time(utc_now()),
         score=0
     )
 
     db.add(room_player)
+    return room_player
 
 
 
@@ -138,9 +209,7 @@ def add_problems_to_room(
     db.add_all(room_problems)
 
 
-# =========================
-# LeetCode API
-# =========================
+
 
 
 def get_leetcode_player_submissions(lc_username: str) -> dict:
@@ -198,10 +267,8 @@ def get_leetcode_player_submissions(lc_username: str) -> dict:
         raise RuntimeError(f"LeetCode API error: {exc}")
 
 
-# =========================
-# Room Creation
-# =========================
 
+# API SERVICES
 
 def create_room(db: Session, model: CreateRoomModel):
     """Create a room with problems and host."""
@@ -216,7 +283,7 @@ def create_room(db: Session, model: CreateRoomModel):
             host_id=host.id,
             current_status=ROOM_STATUS_CREATED,
             duration_min=model.duration,
-            creation_time=datetime.now(timezone.utc),
+            creation_time=to_db_time(utc_now()),
             start_time=None,
             end_time=None,
             last_polled_at=None,
@@ -253,9 +320,6 @@ def create_room(db: Session, model: CreateRoomModel):
         raise
 
 
-# =========================
-# Join Room
-# =========================
 
 
 def join_room(db: Session, model: JoinRoomModel):
@@ -269,10 +333,10 @@ def join_room(db: Session, model: JoinRoomModel):
         )
 
         if room is None:
-            return {404: "Room not found"}
+            raise HTTPException(status_code=404, detail="Room not found")
 
         if room.current_status == ROOM_STATUS_FINISHED:
-            return {400: "Room already finished"}
+            raise HTTPException(status_code=400, detail="Room already finished")
 
         player = get_or_create_player(db, model.username)
 
@@ -286,13 +350,21 @@ def join_room(db: Session, model: JoinRoomModel):
         )
 
         if existing is not None:
-            return {400: "Player already joined room"}
+            db.commit()
+            return {
+                "message": "Joined room",
+                "room_code": room.room_code,
+                "player_id": player.id
+            }
 
-        add_player_to_room(
+        room_player = add_player_to_room(
             db,
             player_id=player.id,
             room_id=room.id
         )
+
+        if room.current_status == ROOM_STATUS_ACTIVE and room_player is not None:
+            room_player.result = RESULT_IN_PROGRESS
 
         db.commit()
 
@@ -302,14 +374,15 @@ def join_room(db: Session, model: JoinRoomModel):
             "player_id": player.id
         }
 
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise
 
 
-# =========================
-# Start Room
-# =========================
+
 
 
 def start_room(db: Session, model: StartRoomModel):
@@ -318,18 +391,18 @@ def start_room(db: Session, model: StartRoomModel):
     try:
         room = (
             db.query(Room)
-            .filter(Room.room_code == model.room_code)
+            .filter(Room.room_code == model.room_code.upper())
             .first()
         )
 
         if room is None:
-            return {404: "Room not found"}
+            raise HTTPException(status_code=404, detail="Room not found")
 
         if room.host_id != model.player_id:
-            return {400: "Host must start room"}
+            raise HTTPException(status_code=400, detail="Host must start room")
 
         if room.current_status != ROOM_STATUS_CREATED:
-            return {400: "Room already started"}
+            raise HTTPException(status_code=400, detail="Room already started")
 
         room_players = (
             db.query(RoomPlayer)
@@ -343,35 +416,45 @@ def start_room(db: Session, model: StartRoomModel):
             .all()
         )
 
-        if len(room_players) < 1:
-            return {400: "No players in room"}
+        if len(room_players) < 2:
+            raise HTTPException(status_code=400, detail="Need at least 2 players")
 
         if len(room_problems) < 1:
-            return {400: "No problems in room"}
+            raise HTTPException(status_code=400, detail="No problems in room")
 
-        start_time = datetime.now(timezone.utc)
+        start_time = utc_now()
 
-        room.start_time = start_time
-        room.end_time = start_time + timedelta(minutes=room.duration_min)
+        room.start_time = to_db_time(start_time)
+        room.end_time = to_db_time(start_time + timedelta(minutes=room.duration_min))
         room.current_status = ROOM_STATUS_ACTIVE
         room.poll_error = None
 
+        for room_player in room_players:
+            room_player.result = RESULT_IN_PROGRESS
+
         db.commit()
 
-        return {200: "Room started"}
+        return {
+            "message": "Room started",
+            "room_code": room.room_code,
+            "start_time": room.start_time,
+            "end_time": room.end_time
+        }
 
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise
 
 
-# =========================
-# Get Room / Poll Submissions
-# =========================
 
 
-def get_room(db: Session, model: JoinRoomModel):
-    """Fetch room state and poll submissions."""
+def get_room(db: Session, model: GetRoomModel):
+    """Fetch room state and poll submissions that landed during the match."""
+
+    room = None
 
     try:
         room_code = model.room_code.upper()
@@ -383,116 +466,156 @@ def get_room(db: Session, model: JoinRoomModel):
         )
 
         if room is None:
-            return None
+            raise HTTPException(status_code=404, detail="Room not found")
 
-        now = datetime.now(timezone.utc)
+        now = utc_now()
+        start_time = parse_db_time(room.start_time)
+        end_time = parse_db_time(room.end_time)
+        time_up = end_time is not None and now >= end_time
 
-        if room.end_time is not None and now >= room.end_time:
-            room.current_status = ROOM_STATUS_FINISHED
-
-        room_players = (
-            db.query(RoomPlayer)
+        player_rows = (
+            db.query(RoomPlayer, Player)
+            .join(Player, Player.id == RoomPlayer.player_id)
             .filter(RoomPlayer.room_id == room.id)
             .all()
         )
+        room_players = [room_player for room_player, _player in player_rows]
 
-        room_problem_slugs = set(
-            db.query(Problem.lc_id)
-            .join(RoomProblem, Problem.id == RoomProblem.problem_id)
-            .filter(RoomProblem.room_id == room.id)
-            .scalars()
-            .all()
+        results_pending = any(
+            room_player.result not in FINAL_RESULTS
+            for room_player in room_players
+        )
+        should_poll = room.current_status == ROOM_STATUS_ACTIVE or (
+            room.current_status == ROOM_STATUS_FINISHED and results_pending
         )
 
-        submissions_to_add = []
-
-        for room_player in room_players:
-            username = (
-                db.query(Player.lc_user)
-                .filter(Player.id == room_player.player_id)
-                .scalar()
+        if should_poll:
+            room_problem_slugs = set(
+                db.query(Problem.lc_id)
+                .join(RoomProblem, Problem.id == RoomProblem.problem_id)
+                .filter(RoomProblem.room_id == room.id)
+                .scalars()
+                .all()
             )
 
-            player_submissions = get_leetcode_player_submissions(username)
+            submissions_to_add = []
 
-            latest_submissions = {}
-
-            for submission in player_submissions["data"]["recentAcSubmissionList"]:
-                slug = submission["titleSlug"]
-
-                if (
-                    slug not in latest_submissions
-                    and slug in room_problem_slugs
-                ):
-                    latest_submissions[slug] = submission
-
-            for submission in latest_submissions.values():
-                submission_time = datetime.fromtimestamp(
-                    int(submission["timestamp"]),
-                    tz=timezone.utc
+            for room_player, player in player_rows:
+                player_submissions = get_leetcode_player_submissions(player.lc_user)
+                recent_submissions = (
+                    (player_submissions.get("data") or {}).get("recentAcSubmissionList")
+                    or []
                 )
 
-                if room.end_time is not None and submission_time > room.end_time:
-                    continue
+                latest_submissions = {}
 
-                existing_submission = (
-                    db.query(Submission)
-                    .join(Problem, Problem.id == Submission.problem_id)
-                    .filter(
-                        Submission.room_id == room.id,
-                        Submission.player_id == room_player.player_id,
-                        Problem.lc_id == submission["titleSlug"]
+                for submission in recent_submissions:
+                    slug = submission.get("titleSlug")
+
+                    if (
+                        slug
+                        and slug not in latest_submissions
+                        and slug in room_problem_slugs
+                    ):
+                        latest_submissions[slug] = submission
+
+                for submission in latest_submissions.values():
+                    submission_time = datetime.fromtimestamp(
+                        int(submission["timestamp"]),
+                        tz=timezone.utc
                     )
-                    .first()
-                )
 
-                if existing_submission is not None:
-                    continue
+                    if not submission_in_window(submission_time, start_time, end_time):
+                        continue
 
-                problem_id = (
-                    db.query(Problem.id)
-                    .filter(Problem.lc_id == submission["titleSlug"])
-                    .scalar()
-                )
-
-                if problem_id is None:
-                    continue
-
-                submissions_to_add.append(
-                    Submission(
-                        room_id=room.id,
-                        player_id=room_player.player_id,
-                        problem_id=problem_id,
-                        submitted_at=submission_time,
-                        current_status="Accepted"
+                    existing_submission = (
+                        db.query(Submission)
+                        .join(Problem, Problem.id == Submission.problem_id)
+                        .filter(
+                            Submission.room_id == room.id,
+                            Submission.player_id == room_player.player_id,
+                            Problem.lc_id == submission["titleSlug"]
+                        )
+                        .first()
                     )
-                )
 
-                room_player.score += 1
+                    if existing_submission is not None:
+                        continue
 
-        if submissions_to_add:
-            db.add_all(submissions_to_add)
+                    problem_id = (
+                        db.query(Problem.id)
+                        .filter(Problem.lc_id == submission["titleSlug"])
+                        .scalar()
+                    )
 
-        room.last_polled_at = now
+                    if problem_id is None:
+                        continue
+
+                    submissions_to_add.append(
+                        Submission(
+                            room_id=room.id,
+                            player_id=room_player.player_id,
+                            problem_id=problem_id,
+                            submitted_at=to_db_time(submission_time),
+                            current_status="Accepted"
+                        )
+                    )
+
+                    room_player.score += 1
+
+            if submissions_to_add:
+                db.add_all(submissions_to_add)
+
+            room.last_polled_at = to_db_time(now)
+            room.poll_error = None
+
+        if time_up or room.current_status == ROOM_STATUS_FINISHED:
+            room.current_status = ROOM_STATUS_FINISHED
+            assign_match_results(room_players)
+
+        problems = (
+            db.query(Problem, RoomProblem.display_order)
+            .join(RoomProblem, Problem.id == RoomProblem.problem_id)
+            .filter(RoomProblem.room_id == room.id)
+            .order_by(RoomProblem.display_order)
+            .all()
+        )
 
         db.commit()
 
         return {
             "room_code": room.room_code,
             "status": room.current_status,
+            "start_time": room.start_time,
+            "end_time": room.end_time,
             "players": [
                 {
-                    "player_id": player.player_id,
-                    "score": player.score
+                    "player_id": room_player.player_id,
+                    "username": player.lc_user,
+                    "score": room_player.score,
+                    "result": room_player.result
                 }
-                for player in room_players
+                for room_player, player in player_rows
+            ],
+            "problems": [
+                {
+                    "title": problem.title,
+                    "slug": problem.lc_id,
+                    "url": problem.lc_url,
+                    "difficulty": problem.difficulty,
+                    "display_order": display_order
+                }
+                for problem, display_order in problems
             ]
         }
 
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as exc:
         db.rollback()
 
-        if 'room' in locals() and room is not None:
+        if room is not None:
             room.poll_error = str(exc)
             db.commit()
 
