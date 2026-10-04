@@ -88,7 +88,7 @@ The seam is `room_problems` plus those two calls. The match code does not know h
 
 `app/schema.sql` is what `init_db` runs. This is that schema, and it matches ADR entry 3.
 
-![Database schema](Research/Database.png)
+![Database schema](../Research/Database.png)
 
 `difficulty` is `Easy`, `Medium`, or `Hard`. Room status is `Created`, `Active`, `Inactive`, or `Finished`. Submission status is `Accepted`, `Wrong_Answer`, `Time_Limit`, or `Pending`. A player's result in a room is `Created`, `In_Progress`, `Winner`, or `Loser`. Timestamps are UTC ISO strings in `TEXT` columns. Foreign keys are on, including `ON DELETE CASCADE` from rooms and players onto the link tables.
 
