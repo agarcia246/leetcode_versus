@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-
+import enum
 
 from sqlalchemy import (
     Column,
@@ -247,3 +247,25 @@ class CreateRoomModel(BaseModel):
     duration:int
     problem_count:int
     difficulty:str
+    topics:list[str]
+
+class JoinRoomModel(BaseModel):
+    username:str
+    room_code:str
+
+
+class StartRoomModel(BaseModel):
+    player_id:str
+    room_code:str
+
+
+class GetRoomModel(BaseModel):
+    room_code:str
+
+
+
+class RoomStatus(str, enum.Enum):
+    CREATED = "Created"
+    ACTIVE = "Active"
+    INACTIVE = "Inactive"
+    FINISHED = "Finished"
