@@ -901,13 +901,13 @@ def get_room(db: Session, model: GetRoomModel):
         )
 
         if should_poll:
-            room_problem_slugs = set(
-                db.query(Problem.lc_id)
+            room_problem_slugs = {
+                lc_id
+                for (lc_id,) in db.query(Problem.lc_id)
                 .join(RoomProblem, Problem.id == RoomProblem.problem_id)
                 .filter(RoomProblem.room_id == room.id)
-                .scalars()
                 .all()
-            )
+            }
 
             submissions_to_add = []
             player_errors = []
