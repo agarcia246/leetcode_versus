@@ -101,6 +101,8 @@ Assignment 2 Dockerizes and deploys this app using a script provided unmodified 
 9. Be configurable entirely via environment variables. No editing source to reconfigure, no hard dependency on a `.env` file existing.
 10. Start and be ready within a few seconds, no manual warm-up.
 
+
+
 ### 8. Documentation
 A short report (4-5 pages):
 - SDLC model chosen and justification (SMART goals; how you did or didn't follow it in practice)
